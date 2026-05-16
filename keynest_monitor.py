@@ -39,7 +39,8 @@ def parse_lockers(html):
     for locker_id in MY_LOCKER_IDS:
         idx = html.find(locker_id)
         if idx == -1:
-            log(f"ADVERTENCIA: No se encontro Locker ID {locker_id}")
+            log(f"Locker ID {locker_id} no encontrado — marcando como OFFLINE")
+            lockers.append({"id": locker_id, "name": f"Locker {locker_id}", "online": False, "status": "OFFLINE"})
             continue
         fragment = html[max(0, idx - 2000):min(len(html), idx + 500)]
         name_matches = re.findall(r"<h[2-5][^>]*>\s*([A-Z][^<]{5,80})\s*</h[2-5]>", fragment)
