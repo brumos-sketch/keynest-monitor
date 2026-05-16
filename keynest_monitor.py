@@ -23,7 +23,7 @@ SESSION_COOKIE = os.environ.get("SESSION_COOKIE", "")
 LOCKERS_URL = "https://secure.keynest.com/PrivateLocker/List"
 
 MY_LOCKERS = {
-    "21979": "KIOSCO LAS HERAS",
+    "99999": "KIOSCO LAS HERAS",
     "21980": "KIOSCO SERRANO",
 }
 
