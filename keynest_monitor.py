@@ -14,14 +14,18 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-# CONFIG — se leen desde variables de entorno en Render
+# CONFIG — variables de entorno en Render
 ALERT_FROM    = os.environ.get("ALERT_FROM",    "bruno.moswalder@gmail.com")
 ALERT_TO      = os.environ.get("ALERT_TO",      "bruno.moswalder@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SESSION_COOKIE = os.environ.get("SESSION_COOKIE", "")
 
 LOCKERS_URL = "https://secure.keynest.com/PrivateLocker/List"
-MY_LOCKER_IDS = ["99999", "21980"]
+
+MY_LOCKERS = {
+    "21979": "KIOSCO LAS HERAS",
+    "21980": "KIOSCO SERRANO",
+}
 
 
 def fetch(url):
@@ -36,28 +40,26 @@ def fetch(url):
 
 def parse_lockers(html):
     lockers = []
-    for locker_id in MY_LOCKER_IDS:
+    for locker_id, locker_name in MY_LOCKERS.items():
         idx = html.find(locker_id)
         if idx == -1:
-            log(f"Locker ID {locker_id} no encontrado — marcando como OFFLINE")
-            lockers.append({"id": locker_id, "name": f"Locker {locker_id}", "online": False, "status": "OFFLINE"})
+            log(f"Locker {locker_name} ({locker_id}) no encontrado — marcando OFFLINE")
+            lockers.append({"id": locker_id, "name": locker_name, "online": False, "status": "OFFLINE"})
             continue
         fragment = html[max(0, idx - 2000):min(len(html), idx + 500)]
-        name_matches = re.findall(r"<h[2-5][^>]*>\s*([A-Z][^<]{5,80})\s*</h[2-5]>", fragment)
-        name = name_matches[-1].strip() if name_matches else f"Locker {locker_id}"
         status_match = re.search(r"\b(ONLINE|OFFLINE)\b", fragment, re.IGNORECASE)
         status = status_match.group(1).upper() if status_match else "UNKNOWN"
-        lockers.append({"id": locker_id, "name": name, "online": status == "ONLINE", "status": status})
+        lockers.append({"id": locker_id, "name": locker_name, "online": status == "ONLINE", "status": status})
     return lockers
 
 
 def send_alert(offline_lockers):
     try:
         now = datetime.now().strftime("%H:%M:%S del %d/%m/%Y")
-        subject = f"Alerta KeyNest — {len(offline_lockers)} locker(s) OFFLINE"
+        subject = " | ".join([f"{lk['name']} OFFLINE" for lk in offline_lockers])
         body = f"<p>Detectado a las <strong>{now}</strong></p><ul>"
         for lk in offline_lockers:
-            body += f"<li><strong>{lk['name']}</strong> (ID: {lk['id']})</li>"
+            body += f"<li><strong>{lk['name']} OFFLINE</strong> (ID: {lk['id']})</li>"
         body += f'</ul><p><a href="{LOCKERS_URL}">Ver en KeyNest</a></p>'
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -99,12 +101,12 @@ def log(msg):
 def main():
     log("--- Verificacion iniciada ---")
     if not SESSION_COOKIE:
-        log("ERROR: SESSION_COOKIE no configurada en variables de entorno.")
+        log("ERROR: SESSION_COOKIE no configurada.")
         return
     try:
         html, final_url = fetch(LOCKERS_URL)
         if "Login" in final_url:
-            log("SESION EXPIRADA: Actualizar SESSION_COOKIE en las variables de entorno de Render.")
+            log("SESION EXPIRADA: Actualizar SESSION_COOKIE en Render.")
             return
         log(f"Pagina obtenida. HTML: {len(html)} chars")
     except Exception as e:
@@ -126,7 +128,7 @@ def main():
 
     newly_offline = [lk for lk in offline if lk["id"] not in prev_offline_ids]
     for rid in prev_offline_ids - curr_offline_ids:
-        log(f"Recuperado: ID {rid}")
+        log(f"Recuperado: {MY_LOCKERS.get(rid, rid)}")
 
     if newly_offline:
         log(f"Nuevos offline: {[lk['name'] for lk in newly_offline]}")
