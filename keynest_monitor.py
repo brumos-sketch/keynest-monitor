@@ -21,7 +21,7 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SESSION_COOKIE = os.environ.get("SESSION_COOKIE", "")
 
 LOCKERS_URL = "https://secure.keynest.com/PrivateLocker/List"
-MY_LOCKER_IDS = ["21979", "21980"]
+MY_LOCKER_IDS = ["99999", "21980"]
 
 
 def fetch(url):
