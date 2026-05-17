@@ -28,7 +28,7 @@ TWILIO_TO      = os.environ.get("TWILIO_TO",     "")
 LOCKERS_URL = "https://secure.keynest.com/PrivateLocker/List"
 
 MY_LOCKERS = {
-    "99999": "KIOSCO LAS HERAS",
+    "21979": "KIOSCO LAS HERAS",
     "21980": "KIOSCO SERRANO",
 }
 
