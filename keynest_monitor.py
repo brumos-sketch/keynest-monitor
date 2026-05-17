@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 KeyNest Locker Monitor - Python 3 para Render.com
+Con alerta por email y llamada telefonica via Twilio
 """
 
 import urllib.request
 import urllib.parse
-import http.cookiejar
 import smtplib
 import json
 import os
@@ -13,12 +13,17 @@ import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+import base64
 
 # CONFIG — variables de entorno en Render
-ALERT_FROM    = os.environ.get("ALERT_FROM",    "bruno.moswalder@gmail.com")
-ALERT_TO      = os.environ.get("ALERT_TO",      "bruno.moswalder@gmail.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+ALERT_FROM     = os.environ.get("ALERT_FROM",    "bruno.moswalder@gmail.com")
+ALERT_TO       = os.environ.get("ALERT_TO",      "bruno.moswalder@gmail.com")
+SMTP_PASSWORD  = os.environ.get("SMTP_PASSWORD", "")
 SESSION_COOKIE = os.environ.get("SESSION_COOKIE", "")
+TWILIO_SID     = os.environ.get("TWILIO_SID",    "")
+TWILIO_TOKEN   = os.environ.get("TWILIO_TOKEN",  "")
+TWILIO_FROM    = os.environ.get("TWILIO_FROM",   "")
+TWILIO_TO      = os.environ.get("TWILIO_TO",     "")
 
 LOCKERS_URL = "https://secure.keynest.com/PrivateLocker/List"
 
@@ -69,9 +74,34 @@ def send_alert(offline_lockers):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
             srv.login(ALERT_FROM, SMTP_PASSWORD)
             srv.sendmail(ALERT_FROM, ALERT_TO, msg.as_string())
-        log(f"Alerta enviada a {ALERT_TO}")
+        log(f"Email enviado a {ALERT_TO}")
     except Exception as e:
         log(f"ERROR enviando email: {e}")
+
+
+def make_call(offline_lockers):
+    try:
+        names = " y ".join([lk["name"] for lk in offline_lockers])
+        message = f"Alerta KeyNest. {names} esta offline. Por favor verificar inmediatamente."
+        twiml = f'<Response><Say language="es-MX">{message}</Say><Pause length="1"/><Say language="es-MX">{message}</Say></Response>'
+
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls.json"
+        data = urllib.parse.urlencode({
+            "To":    TWILIO_TO,
+            "From":  TWILIO_FROM,
+            "Twiml": twiml,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(url, data=data, method="POST")
+        credentials = base64.b64encode(f"{TWILIO_SID}:{TWILIO_TOKEN}".encode()).decode()
+        req.add_header("Authorization", f"Basic {credentials}")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+        resp = urllib.request.urlopen(req, timeout=20)
+        result = json.loads(resp.read().decode())
+        log(f"Llamada iniciada a {TWILIO_TO} — SID: {result.get('sid', 'N/A')}")
+    except Exception as e:
+        log(f"ERROR en llamada Twilio: {e}")
 
 
 STATE_FILE = "/tmp/keynest_state.json"
@@ -133,6 +163,7 @@ def main():
     if newly_offline:
         log(f"Nuevos offline: {[lk['name'] for lk in newly_offline]}")
         send_alert(newly_offline)
+        make_call(newly_offline)
 
     save_state({"offline_ids": list(curr_offline_ids)})
     log("--- Verificacion finalizada ---")
