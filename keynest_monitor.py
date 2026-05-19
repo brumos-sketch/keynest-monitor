@@ -32,6 +32,9 @@ MY_LOCKERS = {
     "21980": "KIOSCO SERRANO",
 }
 
+# Si el HTML es menor a este valor, la sesion probablemente expiro
+HTML_MIN_LENGTH = 150000
+
 
 def fetch(url):
     req = urllib.request.Request(url)
@@ -48,9 +51,7 @@ def parse_lockers(html):
     for locker_id, locker_name in MY_LOCKERS.items():
         idx = html.find(locker_id)
         if idx == -1:
-            log(f"Locker {locker_name} ({locker_id}) no encontrado — marcando OFFLINE")
-            lockers.append({"id": locker_id, "name": locker_name, "online": False, "status": "OFFLINE"})
-            continue
+            continue  # No marcar offline si no se encuentra — puede ser sesion expirada
         fragment = html[max(0, idx - 2000):min(len(html), idx + 500)]
         status_match = re.search(r"\b(ONLINE|OFFLINE)\b", fragment, re.IGNORECASE)
         status = status_match.group(1).upper() if status_match else "UNKNOWN"
@@ -58,14 +59,8 @@ def parse_lockers(html):
     return lockers
 
 
-def send_alert(offline_lockers):
+def send_email(subject, body):
     try:
-        now = datetime.now().strftime("%H:%M:%S del %d/%m/%Y")
-        subject = " | ".join([f"{lk['name']} OFFLINE" for lk in offline_lockers])
-        body = f"<p>Detectado a las <strong>{now}</strong></p><ul>"
-        for lk in offline_lockers:
-            body += f"<li><strong>{lk['name']} OFFLINE</strong> (ID: {lk['id']})</li>"
-        body += f'</ul><p><a href="{LOCKERS_URL}">Ver en KeyNest</a></p>'
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = ALERT_FROM
@@ -79,24 +74,48 @@ def send_alert(offline_lockers):
         log(f"ERROR enviando email: {e}")
 
 
+def send_alert(offline_lockers):
+    now = datetime.now().strftime("%H:%M:%S del %d/%m/%Y")
+    subject = " | ".join([f"{lk['name']} OFFLINE" for lk in offline_lockers])
+    body = f"<p>Detectado a las <strong>{now}</strong></p><ul>"
+    for lk in offline_lockers:
+        body += f"<li><strong>{lk['name']} OFFLINE</strong> (ID: {lk['id']})</li>"
+    body += f'</ul><p><a href="{LOCKERS_URL}">Ver en KeyNest</a></p>'
+    send_email(subject, body)
+
+
+def send_session_expired_alert():
+    now = datetime.now().strftime("%H:%M:%S del %d/%m/%Y")
+    subject = "⚠️ KeyNest Monitor — Sesion expirada"
+    body = f"""
+    <p>Detectado a las <strong>{now}</strong></p>
+    <p>La cookie de sesion de KeyNest <strong>expiro</strong>.</p>
+    <p>El monitor no puede verificar el estado de los lockers hasta que actualices la cookie.</p>
+    <p><strong>Pasos:</strong></p>
+    <ol>
+        <li>Abri Chrome en secure.keynest.com (logueado)</li>
+        <li>F12 → Application → Cookies → copia el valor de <code>.AspNet.ApplicationCookie</code></li>
+        <li>En Render → Environment → actualiza <code>SESSION_COOKIE</code></li>
+    </ol>
+    """
+    send_email(subject, body)
+
+
 def make_call(offline_lockers):
     try:
         names = " y ".join([lk["name"] for lk in offline_lockers])
         message = f"Alerta KeyNest. {names} esta offline. Por favor verificar inmediatamente."
         twiml = f'<Response><Say language="es-MX">{message}</Say><Pause length="1"/><Say language="es-MX">{message}</Say></Response>'
-
         url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls.json"
         data = urllib.parse.urlencode({
             "To":    TWILIO_TO,
             "From":  TWILIO_FROM,
             "Twiml": twiml,
         }).encode("utf-8")
-
         req = urllib.request.Request(url, data=data, method="POST")
         credentials = base64.b64encode(f"{TWILIO_SID}:{TWILIO_TOKEN}".encode()).decode()
         req.add_header("Authorization", f"Basic {credentials}")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
-
         resp = urllib.request.urlopen(req, timeout=20)
         result = json.loads(resp.read().decode())
         log(f"Llamada iniciada a {TWILIO_TO} — SID: {result.get('sid', 'N/A')}")
@@ -113,7 +132,7 @@ def load_state():
                 return json.load(f)
     except Exception:
         pass
-    return {"offline_ids": []}
+    return {"offline_ids": [], "session_alert_sent": False}
 
 
 def save_state(state):
@@ -136,11 +155,22 @@ def main():
     try:
         html, final_url = fetch(LOCKERS_URL)
         if "Login" in final_url:
-            log("SESION EXPIRADA: Actualizar SESSION_COOKIE en Render.")
+            log("SESION EXPIRADA: redirigido al login.")
+            send_session_expired_alert()
             return
         log(f"Pagina obtenida. HTML: {len(html)} chars")
     except Exception as e:
         log(f"ERROR obteniendo pagina: {e}")
+        return
+
+    # Verificar que el HTML tenga el tamaño esperado (sesion valida)
+    if len(html) < HTML_MIN_LENGTH:
+        log(f"ADVERTENCIA: HTML demasiado pequeño ({len(html)} chars) — posible sesion expirada. No se envia alerta de offline.")
+        state = load_state()
+        if not state.get("session_alert_sent"):
+            send_session_expired_alert()
+            state["session_alert_sent"] = True
+            save_state(state)
         return
 
     lockers = parse_lockers(html)
@@ -148,11 +178,14 @@ def main():
         log("ADVERTENCIA: No se encontraron lockers.")
         return
 
+    # Sesion valida — resetear flag
+    state = load_state()
+    state["session_alert_sent"] = False
+
     offline = [lk for lk in lockers if not lk["online"]]
     online  = [lk for lk in lockers if lk["online"]]
     log(f"Estado: {len(online)} online | {len(offline)} offline | Total: {len(lockers)}")
 
-    state = load_state()
     prev_offline_ids = set(state.get("offline_ids", []))
     curr_offline_ids = {lk["id"] for lk in offline}
 
@@ -165,7 +198,8 @@ def main():
         send_alert(newly_offline)
         make_call(newly_offline)
 
-    save_state({"offline_ids": list(curr_offline_ids)})
+    state["offline_ids"] = list(curr_offline_ids)
+    save_state(state)
     log("--- Verificacion finalizada ---")
 
 
